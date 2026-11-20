@@ -17,10 +17,10 @@ from . import ai
 from .db import get_conn
 
 SORTS = {
-    "newest": "a.created_at DESC",
-    "oldest": "a.created_at ASC",
-    "name": "a.title ASC",
-    "largest": "a.size DESC",
+    "newest": "a.created_at DESC, a.id DESC",
+    "oldest": "a.created_at ASC, a.id ASC",
+    "name": "a.title ASC, a.id ASC",
+    "largest": "a.size DESC, a.id DESC",
 }
 
 
@@ -30,62 +30,74 @@ def _fts_query(q: str) -> str:
     return " ".join(f'"{t}"*' for t in terms)
 
 
-def search(
-    *,
-    q: str = "",
-    media_type: Optional[str] = None,
-    tag: Optional[str] = None,
-    collection_id: Optional[int] = None,
-    status: str = "active",
-    sort: str = "newest",
-    mode: str = "keyword",
-    limit: int = 60,
-    offset: int = 0,
-) -> dict:
-    conn = get_conn()
-
-    # Semantic mode ranks the candidate pool by embedding similarity.
-    if mode == "semantic" and q.strip():
-        return _semantic_search(q, media_type, status, limit, offset)
-
-    where = ["a.status = ?"]
-    params: list = [status]
-    join = ""
-
+def _matching_query(*, q="", media_type=None, tag=None, include_tags=None,
+                    exclude_tags=None, collection_id=None, status="active",
+                    sort="newest", mode="keyword"):
+    """One predicate/order definition for counts, pages and CSV exports."""
+    where, params = ["a.status = ?"], [status]
     if q.strip():
-        join += " JOIN asset_fts f ON f.rowid = a.id"
-        where.append("asset_fts MATCH ?")
-        params.append(_fts_query(q))
+        fts = _fts_query(q)
+        # Punctuation-only input contains no searchable tokens: match nothing.
+        if fts:
+            where.append("a.id IN (SELECT rowid FROM asset_fts WHERE asset_fts MATCH ?)")
+            params.append(fts)
+        else:
+            where.append("0")
     if media_type:
         where.append("a.media_type = ?")
         params.append(media_type)
-    if tag:
-        join += (" JOIN asset_tags at ON at.asset_id = a.id"
-                 " JOIN tags t ON t.id = at.tag_id AND t.name = ?")
-        params.append(tag.lower())
-    if collection_id:
-        join += " JOIN collection_assets ca ON ca.asset_id = a.id AND ca.collection_id = ?"
+    if collection_id is not None:
+        where.append("EXISTS (SELECT 1 FROM collection_assets ca "
+                     "WHERE ca.asset_id = a.id AND ca.collection_id = ?)")
         params.append(collection_id)
+    included = {t.strip().lower() for t in [*(include_tags or []), *([tag] if tag else [])] if t.strip()}
+    excluded = {t.strip().lower() for t in (exclude_tags or []) if t.strip()}
+    for names, negate in ((included, False), (excluded, True)):
+        for name in sorted(names):
+            where.append(("NOT " if negate else "") +
+                         "EXISTS (SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id "
+                         "WHERE at.asset_id = a.id AND t.name = ?)")
+            params.append(name)
+    return " AND ".join(where), params, SORTS.get(sort, SORTS["newest"])
 
-    where_sql = " AND ".join(where)
-    order = "bm25(asset_fts)" if q.strip() else SORTS.get(sort, SORTS["newest"])
 
-    total = conn.execute(
-        f"SELECT COUNT(*) AS c FROM assets a{join} WHERE {where_sql}", params
-    ).fetchone()["c"]
-
+def search(*, q="", media_type=None, tag=None, include_tags=None, exclude_tags=None,
+           collection_id=None, status="active", sort="newest", mode="keyword",
+           limit=60, offset=0) -> dict:
+    if not 1 <= limit <= 200 or offset < 0:
+        raise ValueError("limit must be 1..200 and offset must be non-negative")
+    if mode == "semantic" and q.strip():
+        return _semantic_search(q, media_type, status, limit, offset)
+    conn = get_conn()
+    where, params, order = _matching_query(
+        q=q, media_type=media_type, tag=tag, include_tags=include_tags,
+        exclude_tags=exclude_tags, collection_id=collection_id, status=status, sort=sort)
+    total = conn.execute(f"SELECT COUNT(*) AS c FROM assets a WHERE {where}", params).fetchone()["c"]
     rows = conn.execute(
-        f"""SELECT a.* FROM assets a{join} WHERE {where_sql}
-            ORDER BY {order} LIMIT ? OFFSET ?""",
-        [*params, limit, offset],
-    ).fetchall()
+        f"SELECT a.* FROM assets a WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+        [*params, limit, offset]).fetchall()
+    return {"total": total, "items": [_card(dict(r)) for r in rows],
+            "facets": _facets(status), "mode": mode}
 
-    return {
-        "total": total,
-        "items": [_card(dict(r)) for r in rows],
-        "facets": _facets(status),
-        "mode": mode,
-    }
+
+def export_rows(**filters):
+    """Read all matches, batching tag lookups rather than issuing one per asset."""
+    conn = get_conn()
+    where, params, order = _matching_query(**filters)
+    cursor = conn.execute(
+        "SELECT a.id, a.uuid, a.title, a.description, a.filename, a.media_type, a.created_at "
+        f"FROM assets a WHERE {where} ORDER BY {order}", params)
+    while batch := cursor.fetchmany(200):
+        ids = [r["id"] for r in batch]
+        tags = {aid: [] for aid in ids}
+        for row in conn.execute(
+            "SELECT at.asset_id, t.name FROM asset_tags at JOIN tags t ON t.id = at.tag_id "
+            f"WHERE at.asset_id IN ({','.join('?' for _ in ids)}) ORDER BY t.name", ids):
+            tags[row["asset_id"]].append(row["name"])
+        for row in batch:
+            item = dict(row)
+            item["tags"] = tags[item.pop("id")]
+            yield item
 
 
 def _semantic_search(q, media_type, status, limit, offset) -> dict:
