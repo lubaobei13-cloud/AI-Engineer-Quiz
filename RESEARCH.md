@@ -154,11 +154,6 @@ or designed capability.
 | No vendor lock-in | Proprietary containers | Open formats only: standard files on disk, SQLite catalog, full REST API, content-addressable blobs you can read without Keepstack |
 | Pricing | Quote-only / per-seat / MAU | Free and open source (MIT). No seats, no metering, no overage outage |
 
-The honest boundary: Keepstack does not pursue a FedRAMP ATO or generative-AI
-image editing. It wins where most buyers actually live, by combining the
-standards the heritage tools have with the AI and UX the photo libraries have,
-for free, in one install.
-
 ---
 
 *Sources: see [`docs/research/open-source-dams.md`](docs/research/open-source-dams.md),

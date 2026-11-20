@@ -43,14 +43,13 @@ standard library, then the FastAPI routes over everything, then the two-tone
 web client. Kept the standards in the core so they are exercised by the same
 tests as the rest, rather than rotting as an unused side feature.
 
-## Phase 6: prove it, then be honest about it
+## Phase 6: verification and comparison
 
 Wrote the test suite, seeded synthetic demo data, and captured real screenshots
 of the running app. Then graded Keepstack against seven competitors in
-[COMPARISON.md](COMPARISON.md), with the grading checked against the actual
-source so nothing on the roadmap got sold as shipped. The audit downgraded the
-AI cells from "full" to "partial" (heuristic without a key), which is the
-honest result and the more credible one.
+[COMPARISON.md](COMPARISON.md), checking the grading against the source.
+The AI cells were rated "partial" because they use heuristics without a
+provider key.
 
 ## What I would do next
 

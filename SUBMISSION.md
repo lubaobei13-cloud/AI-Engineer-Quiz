@@ -19,7 +19,7 @@ CSV 导出复用列表查询条件和顺序，忽略分页，包含 uuid、title
 
 ## 在干净环境运行
 
-实测 Windows、Python 3.13.3；应用声明支持 Python 3.10+，本次未逐版本验证。全程使用项目独立虚拟环境，不在 Conda base 或全局 Python 中安装依赖。
+本地运行与测试环境为 Windows、Python 3.13.3；GitHub Actions 已通过 Python 3.10 和 3.12 的测试。
 
 PowerShell，在仓库根目录执行：
 
@@ -47,8 +47,8 @@ node --test tests/test_web.cjs
 node --check web/app.js
 ```
 
-- Python：原项目环境和按锁定依赖重新安装的全新虚拟环境均为 37 passed、2 skipped。跳过的是可选本地 CLIP 与 OCR 测试；3 条警告为现有 FastAPI startup/TestClient 弃用提示。
-- CI 保留 Python 3.10/3.12 矩阵，安装 dev 依赖并运行 Python/Node 回归测试；支持开发分支 push。远程运行结果以 GitHub Actions 为准。
+- Python：项目虚拟环境和按锁定依赖重新安装的全新虚拟环境均为 37 passed、2 skipped。跳过的是可选本地 CLIP 与 OCR 测试；3 条警告为现有 FastAPI startup/TestClient 弃用提示。
+- CI：Python 3.10、3.12 两组 Python/Node 回归测试均通过，见 [功能提交的 CI 记录](https://github.com/lubaobei13-cloud/AI-Engineer-Quiz/actions/runs/44741923640)。
 - Node：5 项通过，覆盖请求乱序、防抖期间旧请求失效、翻页重置、导出鉴权和参数一致、失败恢复及 JSON 方法。
 - `tests/quiz_data.py` 生成 44 个实际 PNG 素材及两个集合：36 个正确匹配项，以及排除标签、缺少标签、错误集合、非 active、关键词不匹配、其他素材类型和名称相似标签等反例。测试使用各自的临时数据库，不依赖开发数据库。
 - API 测试额外生成 205 条素材，验证导出跨越标签批次；验证中文、引号、逗号、换行、空表头、非法分页、鉴权、同时间排序和修改后查询导出。
@@ -70,12 +70,14 @@ node tests/browser_quiz.cjs
 
 列表：`GET /api/assets`；导出：`GET /api/assets/export`，均沿用现有登录鉴权。
 
-共享参数：q、collection_id、media_type、重复 include_tags、重复 exclude_tags、sort；兼容旧 tag 参数。列表另接受 limit（1..200）、offset（非负整数）。HTTP 层只允许 active 状态和 keyword 模式，语义搜索入口已隐藏；底层原有语义搜索函数保留。sort 支持 newest/oldest，并兼容原 name/largest。非法值返回 422。导出不接受分页语义。
+共享参数：q、collection_id、media_type、重复 include_tags、重复 exclude_tags、sort；兼容旧 tag 参数。列表另接受 limit（1..200）、offset（非负整数）。HTTP 层只允许 active 状态和 keyword 模式，语义搜索入口已隐藏；底层原有语义搜索函数保留。sort 支持 newest/oldest，并兼容原 name/largest。常见非法参数返回 422；超大整数参数的处理问题见下文。导出不接受分页语义。
 
-保留 SQLite/FTS5 和原生 JS，不增加运行时组件。用 EXISTS 避免标签连接导致重复；计数、分页和导出共用谓词与排序，标签每 200 条批量读取。导出同步构建 CSV，内存占用随结果大小增长，超大导出可在后续改成流式或异步任务。列表与导出按题目约定在数据不变时保证一致，不提供跨请求快照。
+保留 SQLite/FTS5 和原生 JS，不增加运行时组件。用 EXISTS 避免标签连接导致重复；计数、分页和导出共用谓词与排序，标签每 200 条批量读取。导出同步构建 CSV，内存占用随结果大小增长。列表与导出按题目约定在数据不变时保证一致，不提供跨请求快照。
 
-## 限制与未完成项
+## 限制与已知问题
 
-本题要求的功能已完成。没有模型接入、语义检索改造、部署、新权限体系或异步导出。继承的弃用提示和范围外问题未作扩展重构。CSV 保留字段原值，不额外改写公式样式文本。
+- 名称包含 `/` 的标签可以添加和筛选，但通过现有删除接口删除时返回 405，标签仍然保留。此问题尚未修复。
+- `offset` 或 `collection_id` 超出 SQLite 64 位整数范围时，列表请求返回 500；导出接口的超大 `collection_id` 也会返回 500。此问题尚未修复，现有自动化测试未覆盖这类输入。
+- CSV 保留字段原值，不额外改写公式样式文本。
 
 `.venv/`、`.browser-tools/`、本地数据库、上传文件、缓存及凭据不提交。完整保留上游和实际开发历史，修正使用后续提交。

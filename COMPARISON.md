@@ -10,8 +10,7 @@ roadmap. It shows the gap rather than claiming it.
 **How it was graded.** Every Keepstack cell was checked against the actual source
 code in this repository. Every competitor cell was graded against the
 citation-backed research in [`docs/research/`](docs/research/) and
-[`RESEARCH.md`](RESEARCH.md). The grades were then put through adversarial
-honesty and fairness auditors before being recorded here.
+[`RESEARCH.md`](RESEARCH.md).
 
 **Legend:** ✓ full   ◐ partial   $ paywalled (paid tier only)   ◔ roadmap / planned   ✗ none   · not stated in the research
 

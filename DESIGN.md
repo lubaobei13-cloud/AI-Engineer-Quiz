@@ -167,15 +167,12 @@ deciding to.
 Content-addressable storage was the choice that paid off most, because it gave
 deduplication, integrity checking, and preservation fixity all at once.
 
-The part I am most sure about is the honesty. The most credible thing in the
-project is the column in the comparison that shows where Keepstack loses.
-
 ---
 
 ## 9. What's next
 
-The roadmap is in [ROADMAP.md](ROADMAP.md), and it is mostly the honest gaps
-above, turned into direction: local OCR and a real vision model, OAIS format
+The roadmap is in [ROADMAP.md](ROADMAP.md), covering the gaps identified
+above: local OCR and a real vision model, OAIS format
 migration, a published accessibility conformance report, SSO, and deeper IIIF.
 
 If you want to follow the build reasoning as it happened, the
