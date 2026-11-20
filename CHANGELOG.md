@@ -8,6 +8,19 @@ semantic versioning.
 
 ### Added
 
+- Combined keyword, collection, media type, all-required tags and excluded tags.
+- Stable time pagination, authenticated CSV export of all matches, and editable filter chips.
+- Reproducible quiz fixtures, API and client regression tests, and browser verification.
+
+### Fixed
+
+- Bind search parameters in SQL order and honor selected sorting for keyword searches.
+- Reject invalid paging parameters and handle punctuation-only input without FTS errors.
+- Prevent stale requests from replacing current search results.
+- Default JSON client actions to POST so login and existing tag editing work in browsers.
+
+### Added
+
 - Parse common XMP RDF fields into structured metadata, catalog fields, and
   full-text search.
 - OCR images at ingest through the Tesseract binary when it is installed, so
