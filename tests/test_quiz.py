@@ -45,7 +45,9 @@ def exported(client, params):
     assert response.status_code == 200, response.text
     assert response.content.startswith(b"\xef\xbb\xbf")
     assert "attachment" in response.headers["content-disposition"]
-    return list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"), newline="")))
+    reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"), newline=""))
+    assert reader.fieldnames == ["uuid", "title", "description", "filename", "media_type", "tags", "created_at"]
+    return list(reader)
 
 
 @pytest.mark.parametrize("sort", ["oldest", "newest"])
@@ -65,7 +67,7 @@ def test_combined_filters_stable_pages_and_export(catalog, sort):
     rows = exported(client, {**params, "limit": 1, "offset": 7})
     assert [r["uuid"] for r in rows] == found
     special = next(r for r in rows if r["uuid"] == records[0]["uuid"])
-    assert special["description"] == '????, "??"\n???'
+    assert special["description"] == '中文港口, "引号"\n第二行'
     assert json.loads(special["tags"]) == ["approved", "campaign"]
 
 
@@ -105,9 +107,9 @@ def test_edits_reindex_queries_and_export(catalog):
     client, cols, records = catalog
     uuid = records[0]["uuid"]
     detail = "/api/assets/" + uuid
-    response = client.patch(detail, json={"title": "Editedneedle ??", "description": "Changedcaption"})
+    response = client.patch(detail, json={"title": "Editedneedle 中文", "description": "Changedcaption"})
     assert response.status_code == 200
-    assert exported(client, {"q": "editedneedle"})[0]["title"] == "Editedneedle ??"
+    assert exported(client, {"q": "editedneedle"})[0]["title"] == "Editedneedle 中文"
     assert client.get("/api/assets", params={"q": "changedcaption"}).json()["total"] == 1
     assert uuid not in [r["uuid"] for r in exported(client, filters(cols))]
     assert client.post(detail + "/tags", json={"name": "UniqueTag"}).status_code == 200
@@ -116,3 +118,18 @@ def test_edits_reindex_queries_and_export(catalog):
     assert client.delete(detail + "/tags/uniquetag").status_code == 200
     assert client.get("/api/assets", params={"q": "uniquetag"}).json()["total"] == 0
     assert exported(client, {"include_tags": "uniquetag"}) == []
+
+
+def test_export_spans_multiple_tag_batches(catalog):
+    from keepstack.ingest import reindex_fts
+    client, _, _ = catalog
+    conn = db.get_conn()
+    for i in range(205):
+        cur = conn.execute(
+            "INSERT INTO assets (uuid, sha256, filename, storage_key, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (f"batch-{i}", "test", f"file-{i}", "unused", "Batchneedle", "2026-02-01", "2026-02-01"))
+        conn.commit()
+        reindex_fts(cur.lastrowid)
+    rows = exported(client, {"q": "batchneedle", "sort": "oldest"})
+    assert [r["uuid"] for r in rows] == [f"batch-{i}" for i in range(205)]
+    assert all(json.loads(r["tags"]) == [] for r in rows)

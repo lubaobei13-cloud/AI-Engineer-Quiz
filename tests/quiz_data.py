@@ -39,7 +39,7 @@ def create_catalog():
             tags = ["approved-extra", "campaign"]
         elif i == 43:
             tags.append("internal")
-        description = '????, "??"\n???' if i == 0 else f"Description {i}"
+        description = '中文港口, "引号"\n第二行' if i == 0 else f"Description {i}"
         created = f"2026-01-{1 + i // 12:02}T00:00:00Z"
         conn.execute("UPDATE assets SET title=?, description=?, status=?, media_type=?, created_at=? WHERE id=?",
                      (title, description, status, media, created, a["id"]))
