@@ -2,13 +2,14 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const state = { token: localStorage.getItem("keepstack_token"), user: null,
-  q: "", mode: "keyword", media: null, tag: null, sort: "newest", collection: null };
+  q: "", mode: "keyword", media: null, includeTags: [], excludeTags: [],
+  sort: "newest", collection: null, offset: 0, pageSize: 24 };
 
 // ---------- API helper ----------
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
   if (state.token) headers["Authorization"] = "Bearer " + state.token;
-  if (opts.json) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
+  if (opts.json) { opts.method ||= "POST"; headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
   const res = await fetch(path, { ...opts, headers });
   if (res.status === 401) { logout(); throw new Error("unauthorised"); }
   if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
@@ -40,6 +41,7 @@ function enterApp() {
   $("#user-label").textContent = `${state.user.username} (${state.user.role})`;
   const isAdmin = state.user.role === "admin";
   $$(".admin-only").forEach(el => el.classList.toggle("hidden", !isAdmin));
+  loadCollectionOptions();
   loadLibrary();
 }
 
@@ -57,24 +59,135 @@ $$(".nav-item").forEach(btn => btn.addEventListener("click", () => {
 }));
 
 // ---------- library / search ----------
-let searchTimer;
-$("#search").addEventListener("input", (e) => { state.q = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(loadLibrary, 250); });
-$("#search-mode").addEventListener("change", (e) => { state.mode = e.target.value; loadLibrary(); });
-$("#sort").addEventListener("change", (e) => { state.sort = e.target.value; loadLibrary(); });
-$("#active-filter").addEventListener("click", () => { state.media = null; state.tag = null; state.collection = null; loadLibrary(); });
-
-async function loadLibrary() {
-  const p = new URLSearchParams({ q: state.q, sort: state.sort, mode: state.mode, limit: "120" });
+let searchTimer, libraryController, requestId = 0;
+let libraryLoading = false, exporting = false, libraryTotal = null;
+function searchParams(paginated = true) {
+  const p = new URLSearchParams({ q: state.q, sort: state.sort, mode: "keyword" });
   if (state.media) p.set("media_type", state.media);
-  if (state.tag) p.set("tag", state.tag);
   if (state.collection) p.set("collection_id", state.collection);
-  const data = await api("/api/assets?" + p.toString());
-  renderFacets(data.facets);
-  renderGrid(data.items, data.total);
-  const filt = state.media || (state.tag ? "#" + state.tag : null) || (state.collection ? "collection" : null);
-  $("#active-filter").classList.toggle("hidden", !filt);
-  if (filt) $("#active-filter").textContent = filt;
+  state.includeTags.forEach(t => p.append("include_tags", t));
+  state.excludeTags.forEach(t => p.append("exclude_tags", t));
+  if (paginated) { p.set("limit", state.pageSize); p.set("offset", state.offset); }
+  return p;
 }
+function syncControls() {
+  $("#page-prev").disabled = libraryLoading || libraryTotal === null || state.offset === 0;
+  $("#page-next").disabled = libraryLoading || libraryTotal === null || state.offset + state.pageSize >= libraryTotal;
+  $("#btn-export").disabled = libraryLoading || libraryTotal === null || exporting;
+  $("#page-label").textContent = libraryTotal === null ? "" :
+    `Page ${Math.floor(state.offset / state.pageSize) + 1} / ${Math.max(1, Math.ceil(libraryTotal / state.pageSize))} · ${libraryTotal} matches`;
+}
+function refreshLibrary(debounce = false) {
+  state.offset = 0;
+  clearTimeout(searchTimer);
+  // Invalidate immediately, including during the debounce interval.
+  requestId++;
+  libraryController?.abort();
+  libraryLoading = true;
+  $("#search-status").textContent = "Loading...";
+  syncControls();
+  if (debounce) searchTimer = setTimeout(loadLibrary, 250);
+  else return loadLibrary();
+}
+$("#search").addEventListener("input", e => { state.q = e.target.value; refreshLibrary(true); });
+$("#sort").addEventListener("change", e => { state.sort = e.target.value; refreshLibrary(); });
+$("#collection-filter").addEventListener("change", e => { state.collection = e.target.value || null; refreshLibrary(); });
+$("#page-prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - state.pageSize); loadLibrary(); });
+$("#page-next").addEventListener("click", () => { state.offset += state.pageSize; loadLibrary(); });
+$("#search-retry").addEventListener("click", () => loadLibrary());
+$("#clear-filters").addEventListener("click", () => {
+  state.q = ""; state.media = null; state.collection = null; state.includeTags = []; state.excludeTags = [];
+  $("#search").value = ""; $("#collection-filter").value = "";
+  $("#include-tag-input").value = ""; $("#exclude-tag-input").value = "";
+  refreshLibrary();
+});
+for (const kind of ["include", "exclude"]) {
+  const add = () => {
+    const input = $("#" + kind + "-tag-input");
+    const tag = input.value.trim().toLowerCase();
+    if (!tag) return;
+    const tags = state[kind + "Tags"];
+    if (!tags.includes(tag)) tags.push(tag);
+    input.value = ""; refreshLibrary();
+  };
+  $("#" + kind + "-tag-add").addEventListener("click", add);
+  $("#" + kind + "-tag-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); add(); }
+  });
+}
+async function loadCollectionOptions() {
+  try {
+    const data = await api("/api/collections");
+    $("#collection-filter").innerHTML = '<option value="">All collections</option>' +
+      data.collections.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    $("#collection-filter").value = state.collection || "";
+  } catch { toast("Could not load collections. Sign in again to retry.", "error"); }
+}
+function renderConditions() {
+  const conditions = [];
+  if (state.q.trim()) conditions.push(["q", state.q, "Keyword: " + state.q]);
+  if (state.media) conditions.push(["media", state.media, "Type: " + state.media]);
+  if (state.collection) {
+    const option = $("#collection-filter").selectedOptions[0];
+    conditions.push(["collection", state.collection, "Collection: " + (option?.textContent || state.collection)]);
+  }
+  state.includeTags.forEach(t => conditions.push(["includeTags", t, "Include: " + t]));
+  state.excludeTags.forEach(t => conditions.push(["excludeTags", t, "Exclude: " + t]));
+  $("#active-filters").innerHTML = conditions.map(([kind, value, label]) =>
+    `<button class="chip" data-kind="${kind}" data-value="${esc(value)}" title="Remove condition">${esc(label)}</button>`).join("");
+  $$("#active-filters button").forEach(button => button.addEventListener("click", () => {
+    const {kind, value} = button.dataset;
+    if (kind.endsWith("Tags")) state[kind] = state[kind].filter(t => t !== value);
+    else state[kind] = kind === "q" ? "" : null;
+    $("#search").value = state.q; $("#collection-filter").value = state.collection || "";
+    refreshLibrary();
+  }));
+}
+async function loadLibrary() {
+  clearTimeout(searchTimer);
+  const id = ++requestId;
+  libraryController?.abort();
+  libraryController = new AbortController();
+  libraryLoading = true;
+  $("#search-status").textContent = "Loading...";
+  $("#search-retry").classList.add("hidden");
+  $("#grid").setAttribute("aria-busy", "true");
+  renderConditions(); syncControls();
+  try {
+    const data = await api("/api/assets?" + searchParams(), { signal: libraryController.signal });
+    if (id !== requestId) return;
+    libraryTotal = data.total;
+    renderFacets(data.facets); renderGrid(data.items, data.total);
+    $("#search-status").textContent = data.total ? "" : "No assets match these conditions.";
+  } catch (err) {
+    if (id !== requestId || err.name === "AbortError") return;
+    libraryTotal = null;
+    $("#grid").innerHTML = ""; $("#empty").classList.add("hidden");
+    $("#result-title").textContent = "Results unavailable";
+    $("#search-status").textContent = "Could not load results. Check your connection and retry.";
+    $("#search-retry").classList.remove("hidden");
+  } finally {
+    if (id === requestId) {
+      libraryLoading = false; syncControls();
+      $("#grid").setAttribute("aria-busy", "false");
+    }
+  }
+}
+$("#btn-export").addEventListener("click", async () => {
+  exporting = true; syncControls();
+  $("#btn-export").textContent = "Exporting...";
+  try {
+    const response = await api("/api/assets/export?" + searchParams(false));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = "assets.csv";
+    document.body.appendChild(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("CSV downloaded");
+  } catch { toast("CSV download failed. Please retry.", "error"); }
+  finally { exporting = false; $("#btn-export").textContent = "Export all matches"; syncControls(); }
+});
 
 function renderGrid(items, total) {
   $("#result-title").textContent = state.q ? `Results (${total})` : `Library (${total})`;
@@ -94,9 +207,9 @@ function renderFacets(facets) {
   $("#facet-media").innerHTML = (facets.media_types || []).map(m =>
     `<li class="${state.media===m.value?'active':''}" data-media="${m.value}"><span>${m.value}</span><span class="count">${m.count}</span></li>`).join("");
   $("#facet-tags").innerHTML = (facets.tags || []).slice(0, 18).map(t =>
-    `<li class="${state.tag===t.value?'active':''}" data-tag="${esc(t.value)}"><span>${esc(t.value)}</span><span class="count">${t.count}</span></li>`).join("");
-  $$("#facet-media li").forEach(li => li.addEventListener("click", () => { state.media = state.media===li.dataset.media?null:li.dataset.media; loadLibrary(); }));
-  $$("#facet-tags li").forEach(li => li.addEventListener("click", () => { state.tag = state.tag===li.dataset.tag?null:li.dataset.tag; loadLibrary(); }));
+    `<li class="${state.includeTags.includes(t.value)?'active':''}" data-tag="${esc(t.value)}"><span>${esc(t.value)}</span><span class="count">${t.count}</span></li>`).join("");
+  $$("#facet-media li").forEach(li => li.addEventListener("click", () => { state.media = state.media===li.dataset.media?null:li.dataset.media; refreshLibrary(); }));
+  $$("#facet-tags li").forEach(li => li.addEventListener("click", () => { const tag = li.dataset.tag; state.includeTags = state.includeTags.includes(tag) ? state.includeTags.filter(t => t !== tag) : [...state.includeTags, tag]; refreshLibrary(); }));
 }
 
 // ---------- asset detail drawer ----------
@@ -173,12 +286,12 @@ async function openAsset(uuid) {
     $("#tag-add")?.addEventListener("keydown", async (e) => {
       if (e.key === "Enter" && e.target.value.trim()) {
         await api("/api/assets/"+uuid+"/tags", { json: { name: e.target.value.trim() } });
-        openAsset(uuid);
+        openAsset(uuid); refreshLibrary();
       }
     });
     $$("#tag-row .rm").forEach(rm => rm.addEventListener("click", async () => {
       await api("/api/assets/"+uuid+"/tags/"+encodeURIComponent(rm.dataset.tag), { method: "DELETE" });
-      openAsset(uuid);
+      openAsset(uuid); refreshLibrary();
     }));
     $("#d-share")?.addEventListener("click", async () => {
       const r = await api("/api/shares", { json: { target_type: "asset", target_id: a.id, permission: "download" } });
@@ -228,16 +341,17 @@ async function loadCollections() {
     `<div class="collection-card" data-id="${c.id}"><span class="n">${esc(c.name)}</span><span class="muted">${c.asset_count} assets</span><span class="muted">${esc(c.description||"")}</span></div>`).join("")
     || '<p class="muted">No collections yet.</p>';
   $$("#collection-list .collection-card").forEach(card => card.addEventListener("click", () => {
-    state.collection = card.dataset.id; state.media = null; state.tag = null;
+    state.collection = card.dataset.id;
+    $("#collection-filter").value = state.collection;
     $$(".nav-item").forEach(b => b.classList.remove("active"));
     $('.nav-item[data-view="library"]').classList.add("active");
     $$(".view").forEach(v => v.classList.add("hidden")); $("#view-library").classList.remove("hidden");
-    loadLibrary();
+    refreshLibrary();
   }));
 }
 $("#btn-new-collection").addEventListener("click", async () => {
   const name = prompt("Collection name"); if (!name) return;
-  await api("/api/collections", { json: { name } }); loadCollections();
+  await api("/api/collections", { json: { name } }); loadCollections(); loadCollectionOptions();
 });
 
 // ---------- dashboard ----------

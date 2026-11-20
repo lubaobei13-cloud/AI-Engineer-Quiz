@@ -31,9 +31,8 @@
       </div>
       <div class="search-box">
         <input id="search" placeholder="Search assets, tags, metadata...">
-        <select id="search-mode" title="Search mode">
+        <select id="search-mode" title="Search mode" hidden>
           <option value="keyword">Keyword</option>
-          <option value="semantic">Semantic</option>
         </select>
       </div>
       <div class="topbar-right">
@@ -57,11 +56,11 @@
 
         <div id="facets" class="facets">
           <div class="facet-group">
-            <h4>Media type</h4>
+            <h4>Media type</h4><p class="muted facet-note">Counts across all active assets</p>
             <ul id="facet-media"></ul>
           </div>
           <div class="facet-group">
-            <h4>Top tags</h4>
+            <h4>Top tags</h4><p class="muted facet-note">Counts across all active assets</p>
             <ul id="facet-tags"></ul>
           </div>
         </div>
@@ -72,7 +71,7 @@
           <div class="view-head">
             <h2 id="result-title">Library</h2>
             <div class="view-controls">
-              <span id="active-filter" class="chip hidden"></span>
+              <button id="btn-export" class="btn" disabled>Export all matches</button>
               <select id="sort">
                 <option value="newest">Newest</option>
                 <option value="oldest">Oldest</option>
@@ -81,8 +80,17 @@
               </select>
             </div>
           </div>
-          <div id="grid" class="grid"></div>
-          <div id="empty" class="empty hidden">No assets yet. Click Upload to get started.</div>
+          <div class="search-filters">
+            <label>Collection<select id="collection-filter"><option value="">All collections</option></select></label>
+            <div><label for="include-tag-input">Must include every tag</label><div class="tag-filter-input"><input id="include-tag-input" placeholder="Exact tag name"><button id="include-tag-add" class="btn">Include</button></div></div>
+            <div><label for="exclude-tag-input">Exclude any of these tags</label><div class="tag-filter-input"><input id="exclude-tag-input" placeholder="Exact tag name"><button id="exclude-tag-add" class="btn">Exclude</button></div></div>
+            <button id="clear-filters" class="btn btn-ghost">Clear filters</button>
+          </div>
+          <div id="active-filters" class="active-filters" aria-label="Active conditions"></div>
+          <div class="search-feedback"><span id="search-status" role="status" aria-live="polite"></span><button id="search-retry" class="btn hidden">Retry</button></div>
+          <div id="grid" class="grid" aria-busy="false"></div>
+          <div id="empty" class="empty hidden">No assets match these conditions. Change or clear your filters.</div>
+          <div class="pagination"><button id="page-prev" class="btn" disabled>Previous</button><span id="page-label" aria-live="polite"></span><button id="page-next" class="btn" disabled>Next</button></div>
         </div>
 
         <div id="view-collections" class="view hidden">
